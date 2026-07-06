@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { useAuth } from '@/lib/auth-context';
 
 const navItems = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
@@ -18,6 +19,7 @@ const navItems = [
   { href: '/admin/withdrawals', label: 'Withdrawals', icon: ArrowUpFromLine },
   { href: '/admin/investments', label: 'Investments', icon: TrendingUp },
   { href: '/admin/claims', label: 'Claims', icon: Gift },
+  { href: '/admin/support', label: 'Support', icon: Bell },
   { href: '/admin/reports', label: 'Reports', icon: FileBarChart },
   { href: '/admin/notifications', label: 'Notifications', icon: Bell },
   { href: '/admin/website-settings', label: 'Website Settings', icon: Settings },
@@ -29,9 +31,11 @@ const navItems = [
 export function AdminSidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const { signOut } = useAuth();
   const [open, setOpen] = useState(false);
 
-  const logout = () => {
+  const logout = async () => {
+    await signOut();
     toast.success('Admin logged out');
     router.push('/');
   };

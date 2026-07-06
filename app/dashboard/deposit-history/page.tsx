@@ -1,64 +1,69 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
+import { Check, Clock, X } from 'lucide-react';
 import { GlassCard } from '@/components/shared/glass-card';
 import { DashboardHeader } from '@/components/shared/dashboard-header';
-import { Clock, CheckCircle2, XCircle } from 'lucide-react';
-
-const deposits = [
-  { ref: 'CM-A8K2P9', amount: 50000, date: 'Jul 5, 2026 10:32 AM', status: 'approved' },
-  { ref: 'CM-B3M7X1', amount: 25000, date: 'Jul 3, 2026 2:15 PM', status: 'approved' },
-  { ref: 'CM-C9N4Q8', amount: 100000, date: 'Jul 1, 2026 9:00 AM', status: 'approved' },
-  { ref: 'CM-D1P5R2', amount: 5000, date: 'Jun 28, 2026 4:45 PM', status: 'pending' },
-  { ref: 'CM-E6S8T3', amount: 15000, date: 'Jun 25, 2026 11:20 AM', status: 'rejected' },
-];
-
-const statusConfig = {
-  approved: { icon: CheckCircle2, color: 'text-brand-400', bg: 'bg-brand-500/15', label: 'Approved' },
-  pending: { icon: Clock, color: 'text-gold-400', bg: 'bg-gold-500/15', label: 'Pending' },
-  rejected: { icon: XCircle, color: 'text-red-400', bg: 'bg-red-500/15', label: 'Rejected' },
-};
+import { useAuth } from '@/lib/auth-context';
+import { supabase } from '@/lib/supabase';
+import { formatNaira, formatDateTime } from '@/lib/helpers';
 
 export default function DepositHistoryPage() {
+  const { profile } = useAuth();
+  const [deposits, setDeposits] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!profile) return;
+    (async () => {
+      const { data } = await supabase.from('deposits').select('*').eq('user_id', profile.id).order('created_at', { ascending: false });
+      setDeposits(data || []);
+      setLoading(false);
+    })();
+  }, [profile]);
+
+  if (loading) return <div className="flex justify-center min-h-[60vh] items-center"><div className="w-10 h-10 rounded-full border-4 border-brand-500/20 border-t-brand-500 animate-spin" /></div>;
+
   return (
     <div>
       <DashboardHeader title="Deposit History" subtitle="All your deposit transactions." />
+
       <GlassCard className="p-6">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="text-left text-xs text-white/40 uppercase tracking-wider border-b border-white/10">
-                <th className="pb-3 font-medium">Reference</th>
-                <th className="pb-3 font-medium">Amount</th>
-                <th className="pb-3 font-medium">Date</th>
-                <th className="pb-3 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {deposits.map((d, i) => {
-                const s = statusConfig[d.status as keyof typeof statusConfig];
-                return (
-                  <motion.tr
-                    key={d.ref}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.05 }}
-                    className="border-b border-white/5 last:border-0"
-                  >
-                    <td className="py-4 font-mono text-sm text-brand-400">{d.ref}</td>
-                    <td className="py-4 font-semibold">₦{d.amount.toLocaleString()}</td>
-                    <td className="py-4 text-sm text-white/50">{d.date}</td>
-                    <td className="py-4">
-                      <span className={`inline-flex items-center gap-1.5 ${s.bg} ${s.color} px-3 py-1 rounded-full text-xs font-medium`}>
-                        <s.icon className="w-3.5 h-3.5" /> {s.label}
+        {deposits.length === 0 ? (
+          <p className="text-sm text-white/40 text-center py-12">No deposits yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="text-xs text-white/40 border-b border-white/10">
+                  <th className="text-left py-3 px-2">Reference</th>
+                  <th className="text-right py-3 px-2">Amount</th>
+                  <th className="text-left py-3 px-2">Date</th>
+                  <th className="text-center py-3 px-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deposits.map((d) => (
+                  <tr key={d.id} className="border-b border-white/5 last:border-0">
+                    <td className="py-3 px-2 text-sm font-mono">{d.reference}</td>
+                    <td className="py-3 px-2 text-right font-display font-bold text-sm">{formatNaira(Number(d.amount))}</td>
+                    <td className="py-3 px-2 text-sm text-white/50">{formatDateTime(d.created_at)}</td>
+                    <td className="py-3 px-2 text-center">
+                      <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full capitalize ${
+                        d.status === 'approved' ? 'bg-brand-500/15 text-brand-400' :
+                        d.status === 'pending' ? 'bg-gold-500/15 text-gold-400' :
+                        'bg-red-500/15 text-red-400'
+                      }`}>
+                        {d.status === 'approved' ? <Check className="w-3 h-3" /> : d.status === 'pending' ? <Clock className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                        {d.status}
                       </span>
                     </td>
-                  </motion.tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </GlassCard>
     </div>
   );

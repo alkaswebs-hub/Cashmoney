@@ -1,232 +1,260 @@
 'use client';
 
-import { motion, AnimatePresence } from 'framer-motion';
-import { useState } from 'react';
-import {
-  Copy, Check, Upload, Banknote, FileText, Clock, CheckCircle2,
-  AlertCircle, ArrowRight, Info,
-} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
+import { Copy, Upload, Check, Clock, X, Building2, FileText } from 'lucide-react';
 import { GlassCard } from '@/components/shared/glass-card';
 import { DashboardHeader } from '@/components/shared/dashboard-header';
+import { useAuth } from '@/lib/auth-context';
+import { supabase } from '@/lib/supabase';
+import { formatNaira, generateReference, formatDateTime } from '@/lib/helpers';
 import { toast } from 'sonner';
 
-const bankDetails = {
-  bank: 'Moniepoint',
-  accountName: 'Bukar Dauda',
-  accountNumber: '5005723997',
-};
-
-type Stage = 'form' | 'pending' | 'approved';
-
 export default function DepositPage() {
-  const [copied, setCopied] = useState(false);
-  const [amount, setAmount] = useState(5000);
-  const [reference] = useState(() => `CM-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
-  const [receipt, setReceipt] = useState<string | null>(null);
-  const [stage, setStage] = useState<Stage>('form');
+  const { profile } = useAuth();
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [amount, setAmount] = useState('');
+  const [reference] = useState(generateReference('DEP'));
+  const [receipt, setReceipt] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [deposits, setDeposits] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const copyAccount = () => {
-    navigator.clipboard?.writeText(bankDetails.accountNumber);
-    setCopied(true);
-    toast.success('Account number copied');
-    setTimeout(() => setCopied(false), 2000);
+  useEffect(() => {
+    (async () => {
+      const { data: s } = await supabase.from('settings').select('key,value');
+      const map: Record<string, string> = {};
+      (s || []).forEach((r: any) => { map[r.key] = r.value; });
+      setSettings(map);
+
+      if (profile) {
+        const { data: d } = await supabase.from('deposits').select('*').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(5);
+        setDeposits(d || []);
+      }
+      setLoading(false);
+    })();
+  }, [profile]);
+
+  const copyText = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`${label} copied`);
   };
 
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) {
-      setReceipt(f.name);
-      toast.success('Receipt uploaded');
-    }
-  };
-
-  const submit = async (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (amount < 5000) {
-      toast.error('Minimum deposit is ₦5,000');
+    const amt = parseFloat(amount);
+    const minDeposit = parseFloat(settings.min_deposit || '5000');
+
+    if (!amt || amt < minDeposit) {
+      toast.error(`Minimum deposit is ${formatNaira(minDeposit)}`);
       return;
     }
     if (!receipt) {
       toast.error('Please upload your payment receipt');
       return;
     }
-    setStage('pending');
-    toast.success('Deposit submitted. Awaiting admin approval.');
+
+    setSubmitting(true);
+
+    let receiptUrl: string | null = null;
+    if (receipt && profile) {
+      const ext = receipt.name.split('.').pop();
+      const fileName = `${profile.id}/${reference}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('receipts').upload(fileName, receipt);
+      if (upErr) {
+        toast.error('Failed to upload receipt: ' + upErr.message);
+        setSubmitting(false);
+        return;
+      }
+      const { data: pub } = supabase.storage.from('receipts').getPublicUrl(fileName);
+      receiptUrl = pub.publicUrl;
+    }
+
+    const { error } = await supabase.from('deposits').insert({
+      user_id: profile!.id,
+      reference,
+      amount: amt,
+      receipt_url: receiptUrl,
+      status: 'pending',
+    });
+
+    if (error) {
+      toast.error('Failed to submit deposit: ' + error.message);
+    } else {
+      toast.success('Deposit submitted! Awaiting admin approval.');
+      setAmount('');
+      setReceipt(null);
+      const { data: d } = await supabase.from('deposits').select('*').eq('user_id', profile!.id).order('created_at', { ascending: false }).limit(5);
+      setDeposits(d || []);
+    }
+    setSubmitting(false);
   };
+
+  if (loading) return <div className="flex justify-center min-h-[60vh] items-center"><div className="w-10 h-10 rounded-full border-4 border-brand-500/20 border-t-brand-500 animate-spin" /></div>;
+
+  const bankName = settings.bank_name || 'Moniepoint';
+  const accountName = settings.account_name || 'Bukar Dauda';
+  const accountNumber = settings.account_number || '5005723997';
+  const minDeposit = parseFloat(settings.min_deposit || '5000');
 
   return (
     <div>
-      <DashboardHeader title="Deposit Funds" subtitle="Minimum deposit: ₦5,000 via Moniepoint transfer." />
+      <DashboardHeader title="Deposit" subtitle="Make a bank transfer and upload your receipt." />
 
-      <AnimatePresence mode="wait">
-        {stage === 'form' && (
-          <motion.div
-            key="form"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="grid lg:grid-cols-2 gap-6"
-          >
-            {/* Bank details */}
-            <GlassCard variant="brand" className="p-6">
-              <div className="flex items-center gap-2 mb-5">
-                <Banknote className="w-5 h-5 text-brand-400" />
-                <h3 className="font-display font-semibold">Bank Transfer Details</h3>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+          <GlassCard variant="brand" className="p-6">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center">
+                <Building2 className="w-5 h-5 text-ink-900" strokeWidth={2.5} />
+              </div>
+              <div>
+                <h3 className="font-display font-bold">Bank Details</h3>
+                <p className="text-xs text-white/40">Transfer to this account</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="glass rounded-xl p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-white/40">Bank Name</p>
+                  <p className="font-display font-semibold mt-0.5">{bankName}</p>
+                </div>
+                <button onClick={() => copyText(bankName, 'Bank name')} className="w-8 h-8 rounded-lg glass hover:bg-white/10 flex items-center justify-center transition-colors">
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
               </div>
 
-              <div className="space-y-4">
-                <div className="glass rounded-2xl p-4">
-                  <p className="text-xs text-white/40 mb-1">Bank</p>
-                  <p className="font-semibold">{bankDetails.bank}</p>
+              <div className="glass rounded-xl p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-white/40">Account Name</p>
+                  <p className="font-display font-semibold mt-0.5">{accountName}</p>
                 </div>
-                <div className="glass rounded-2xl p-4">
-                  <p className="text-xs text-white/40 mb-1">Account Name</p>
-                  <p className="font-semibold">{bankDetails.accountName}</p>
+                <button onClick={() => copyText(accountName, 'Account name')} className="w-8 h-8 rounded-lg glass hover:bg-white/10 flex items-center justify-center transition-colors">
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="glass rounded-xl p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-white/40">Account Number</p>
+                  <p className="font-display font-semibold text-lg mt-0.5 tracking-wider">{accountNumber}</p>
                 </div>
-                <div className="glass-brand rounded-2xl p-4">
-                  <p className="text-xs text-white/40 mb-1">Account Number</p>
-                  <div className="flex items-center justify-between">
-                    <p className="font-display text-2xl font-bold tracking-wider text-brand-400">{bankDetails.accountNumber}</p>
-                    <button
-                      onClick={copyAccount}
-                      className="glass-strong rounded-full px-3 py-2 text-xs font-medium flex items-center gap-1.5 hover:bg-white/15 transition-colors"
-                    >
-                      {copied ? <><Check className="w-3.5 h-3.5 text-brand-400" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}
-                    </button>
+                <button onClick={() => copyText(accountNumber, 'Account number')} className="w-8 h-8 rounded-lg glass hover:bg-white/10 flex items-center justify-center transition-colors">
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-5 glass-brand rounded-xl p-4">
+              <p className="text-xs text-white/40 mb-1">Your Reference Number</p>
+              <div className="flex items-center justify-between">
+                <p className="font-display font-bold text-brand-400 tracking-wider">{reference}</p>
+                <button onClick={() => copyText(reference, 'Reference')} className="w-8 h-8 rounded-lg glass hover:bg-white/10 flex items-center justify-center transition-colors">
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-xs text-white/30 mt-2">Use this as the transfer description/narration.</p>
+            </div>
+
+            <div className="mt-4 text-xs text-white/40 flex items-center gap-2">
+              <FileText className="w-3.5 h-3.5" />
+              Minimum deposit: {formatNaira(minDeposit)}
+            </div>
+          </GlassCard>
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+          <GlassCard className="p-6">
+            <h3 className="font-display font-bold mb-5">Submit Deposit Proof</h3>
+            <form onSubmit={onSubmit} className="space-y-4">
+              <div>
+                <label className="text-xs text-white/60 mb-1.5 block">Amount (₦)</label>
+                <input
+                  type="number"
+                  required
+                  min={minDeposit}
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors"
+                  placeholder={`Minimum ${formatNaira(minDeposit)}`}
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-white/60 mb-1.5 block">Reference Number</label>
+                <input
+                  readOnly
+                  value={reference}
+                  className="w-full glass rounded-xl px-4 py-3 text-sm outline-none border border-white/10 text-brand-400 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-white/60 mb-1.5 block">Upload Receipt</label>
+                <label className="block">
+                  <div className="glass rounded-xl border-2 border-dashed border-white/10 hover:border-brand-500/50 p-6 text-center cursor-pointer transition-colors">
+                    {receipt ? (
+                      <div className="flex items-center justify-center gap-2 text-brand-400">
+                        <Check className="w-5 h-5" />
+                        <span className="text-sm font-medium">{receipt.name}</span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-2 text-white/40">
+                        <Upload className="w-6 h-6" />
+                        <span className="text-sm">Click to upload receipt image</span>
+                      </div>
+                    )}
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => setReceipt(e.target.files?.[0] || null)}
+                  />
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full bg-gradient-to-r from-brand-500 to-brand-400 text-ink-900 font-semibold py-3.5 rounded-xl hover:shadow-glow transition-all disabled:opacity-50"
+              >
+                {submitting ? 'Submitting...' : 'Submit Deposit'}
+              </button>
+            </form>
+          </GlassCard>
+        </motion.div>
+      </div>
+
+      {deposits.length > 0 && (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="mt-6">
+          <GlassCard className="p-6">
+            <h3 className="font-display font-bold mb-4">Recent Deposits</h3>
+            <div className="space-y-3">
+              {deposits.map((d) => (
+                <div key={d.id} className="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                      d.status === 'approved' ? 'bg-brand-500/15' : d.status === 'pending' ? 'bg-gold-500/15' : 'bg-red-500/15'
+                    }`}>
+                      {d.status === 'approved' ? <Check className="w-4 h-4 text-brand-400" /> : d.status === 'pending' ? <Clock className="w-4 h-4 text-gold-400" /> : <X className="w-4 h-4 text-red-400" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium font-mono">{d.reference}</p>
+                      <p className="text-xs text-white/40">{formatDateTime(d.created_at)}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-display font-bold">{formatNaira(Number(d.amount))}</p>
+                    <span className={`text-xs capitalize ${d.status === 'approved' ? 'text-brand-400' : d.status === 'pending' ? 'text-gold-400' : 'text-red-400'}`}>{d.status}</span>
                   </div>
                 </div>
-              </div>
-
-              <div className="mt-5 glass rounded-2xl p-4 flex gap-3">
-                <Info className="w-4 h-4 text-gold-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-white/60 leading-relaxed">
-                  Transfer exactly the amount you want to deposit. Then upload your receipt below and submit.
-                  Your wallet will be credited after admin approval.
-                </p>
-              </div>
-            </GlassCard>
-
-            {/* Deposit form */}
-            <GlassCard className="p-6">
-              <h3 className="font-display font-semibold mb-5">Submit Deposit</h3>
-              <form onSubmit={submit} className="space-y-4">
-                <div>
-                  <label className="text-xs text-white/60 mb-1.5 block">Deposit Amount (₦)</label>
-                  <input
-                    type="number"
-                    min={5000}
-                    value={amount}
-                    onChange={(e) => setAmount(Number(e.target.value))}
-                    className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors"
-                  />
-                  <p className="text-xs text-white/40 mt-1.5">Minimum: ₦5,000</p>
-                </div>
-
-                <div>
-                  <label className="text-xs text-white/60 mb-1.5 block">Reference Number</label>
-                  <div className="glass rounded-xl px-4 py-3 text-sm font-mono text-brand-400">{reference}</div>
-                  <p className="text-xs text-white/40 mt-1.5">Use this as transfer narration.</p>
-                </div>
-
-                <div>
-                  <label className="text-xs text-white/60 mb-1.5 block">Upload Payment Receipt</label>
-                  <label className="block cursor-pointer">
-                    <div className="glass rounded-xl border-2 border-dashed border-white/15 p-6 text-center hover:border-brand-500/50 transition-colors">
-                      {receipt ? (
-                        <div className="flex items-center justify-center gap-2 text-brand-400">
-                          <CheckCircle2 className="w-5 h-5" />
-                          <span className="text-sm font-medium">{receipt}</span>
-                        </div>
-                      ) : (
-                        <>
-                          <Upload className="w-6 h-6 text-white/40 mx-auto mb-2" />
-                          <p className="text-sm text-white/50">Click to upload receipt</p>
-                          <p className="text-xs text-white/30 mt-1">PNG, JPG, PDF up to 5MB</p>
-                        </>
-                      )}
-                    </div>
-                    <input type="file" accept="image/*,.pdf" className="hidden" onChange={onFile} />
-                  </label>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full bg-gradient-to-r from-brand-500 to-brand-400 text-ink-900 font-semibold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:shadow-glow transition-all"
-                >
-                  Submit Deposit <ArrowRight className="w-4 h-4" />
-                </button>
-              </form>
-            </GlassCard>
-          </motion.div>
-        )}
-
-        {stage === 'pending' && (
-          <motion.div
-            key="pending"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className="max-w-lg mx-auto"
-          >
-            <GlassCard variant="strong" className="p-8 text-center">
-              <div className="w-16 h-16 rounded-full bg-gold-500/15 flex items-center justify-center mx-auto mb-5">
-                <Clock className="w-8 h-8 text-gold-400 animate-pulse" />
-              </div>
-              <h3 className="font-display text-xl font-bold mb-2">Deposit Pending Approval</h3>
-              <p className="text-sm text-white/50 mb-6">
-                Your deposit of <span className="text-brand-400 font-semibold">₦{amount.toLocaleString()}</span> is being reviewed by our admin team.
-                This usually takes a few minutes.
-              </p>
-              <div className="glass rounded-2xl p-4 text-left space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-white/40">Reference</span><span className="font-mono text-brand-400">{reference}</span></div>
-                <div className="flex justify-between"><span className="text-white/40">Amount</span><span>₦{amount.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-white/40">Status</span><span className="text-gold-400">Pending</span></div>
-              </div>
-              <button
-                onClick={() => setStage('approved')}
-                className="mt-6 text-sm text-brand-400 hover:underline"
-              >
-                Simulate approval (demo)
-              </button>
-            </GlassCard>
-          </motion.div>
-        )}
-
-        {stage === 'approved' && (
-          <motion.div
-            key="approved"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="max-w-lg mx-auto"
-          >
-            <GlassCard variant="brand" className="p-8 text-center">
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ type: 'spring', delay: 0.1 }}
-                className="w-16 h-16 rounded-full bg-brand-500/20 flex items-center justify-center mx-auto mb-5"
-              >
-                <CheckCircle2 className="w-8 h-8 text-brand-400" />
-              </motion.div>
-              <h3 className="font-display text-xl font-bold mb-2">Deposit Approved!</h3>
-              <p className="text-sm text-white/50 mb-6">
-                Your wallet has been credited with <span className="text-brand-400 font-semibold">₦{amount.toLocaleString()}</span>.
-              </p>
-              <div className="glass rounded-2xl p-4 text-left space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-white/40">Amount</span><span>₦{amount.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-white/40">Status</span><span className="text-brand-400">Approved</span></div>
-                <div className="flex justify-between"><span className="text-white/40">New Balance</span><span className="text-brand-400 font-semibold">₦{(248500 + amount).toLocaleString()}</span></div>
-              </div>
-              <button
-                onClick={() => { setStage('form'); setReceipt(null); }}
-                className="mt-6 w-full bg-gradient-to-r from-brand-500 to-brand-400 text-ink-900 font-semibold py-3 rounded-xl"
-              >
-                Make Another Deposit
-              </button>
-            </GlassCard>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              ))}
+            </div>
+          </GlassCard>
+        </motion.div>
+      )}
     </div>
   );
 }

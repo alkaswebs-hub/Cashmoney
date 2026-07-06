@@ -1,8 +1,10 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { Toaster } from '@/components/ui/sonner';
+import { AuthProvider } from '@/lib/auth-context';
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://cashmoney.ng'),
   title: 'CASH MONEY — Invest • Earn • Grow',
   description:
     'CASH MONEY is Nigeria’s premium investment platform. Invest, earn 10% daily returns over 120 days, and grow your wealth with confidence.',
@@ -33,7 +35,9 @@ export default function RootLayout({
         className="font-sans antialiased min-h-screen bg-[#050816] text-[#E6EDF3]"
         style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
       >
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
         <Toaster />
       </body>
     </html>

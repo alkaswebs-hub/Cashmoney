@@ -1,131 +1,234 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { useState } from 'react';
-import { ArrowUpFromLine, Clock, Calendar, Info, CheckCircle2 } from 'lucide-react';
+import { ArrowUpFromLine, Clock, Check } from 'lucide-react';
 import { GlassCard } from '@/components/shared/glass-card';
 import { DashboardHeader } from '@/components/shared/dashboard-header';
+import { useAuth } from '@/lib/auth-context';
+import { supabase } from '@/lib/supabase';
+import { formatNaira, generateReference, isWithinWithdrawWindow, formatDateTime } from '@/lib/helpers';
 import { toast } from 'sonner';
 
 export default function WithdrawPage() {
-  const [amount, setAmount] = useState(1000);
-  const [bank, setBank] = useState('');
-  const [account, setAccount] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [done, setDone] = useState(false);
+  const { profile } = useAuth();
+  const [wallet, setWallet] = useState<any>(null);
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [form, setForm] = useState({ amount: '', bank_name: '', account_name: '', account_number: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [withdrawals, setWithdrawals] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [windowOpen, setWindowOpen] = useState(false);
 
-  // Simulate WAT time check: Mon-Fri 9AM-12PM
-  const now = new Date();
-  const day = now.getDay();
-  const hour = now.getHours();
-  const isWeekday = day >= 1 && day <= 5;
-  const isWindow = hour >= 9 && hour < 12;
-  const canWithdraw = isWeekday && isWindow;
+  useEffect(() => {
+    (async () => {
+      const { data: s } = await supabase.from('settings').select('key,value');
+      const map: Record<string, string> = {};
+      (s || []).forEach((r: any) => { map[r.key] = r.value; });
+      setSettings(map);
 
-  const submit = async (e: React.FormEvent) => {
+      const open = isWithinWithdrawWindow(
+        map.withdraw_start || '09:00',
+        map.withdraw_end || '12:00',
+        map.withdraw_days || '1,2,3,4,5'
+      );
+      setWindowOpen(open);
+
+      if (profile) {
+        const { data: w } = await supabase.from('wallets').select('*').eq('user_id', profile.id).maybeSingle();
+        setWallet(w);
+
+        if (profile.bank_name) setForm(f => ({ ...f, bank_name: profile.bank_name || '' }));
+        if (profile.account_name) setForm(f => ({ ...f, account_name: profile.account_name || '' }));
+        if (profile.account_number) setForm(f => ({ ...f, account_number: profile.account_number || '' }));
+
+        const { data: wd } = await supabase.from('withdrawals').select('*').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(5);
+        setWithdrawals(wd || []);
+      }
+      setLoading(false);
+    })();
+  }, [profile]);
+
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (amount < 1000) { toast.error('Minimum withdrawal is ₦1,000'); return; }
-    if (!bank || !account) { toast.error('Please enter bank details'); return; }
-    setLoading(true);
-    await new Promise((r) => setTimeout(r, 1200));
-    setDone(true);
-    setLoading(false);
-    toast.success('Withdrawal request submitted!');
+    const amt = parseFloat(form.amount);
+    const minWd = parseFloat(settings.min_withdrawal || '1000');
+    const balance = wallet?.balance || 0;
+
+    if (!amt || amt < minWd) {
+      toast.error(`Minimum withdrawal is ${formatNaira(minWd)}`);
+      return;
+    }
+    if (amt > balance) {
+      toast.error('Insufficient balance');
+      return;
+    }
+    if (!form.bank_name || !form.account_name || !form.account_number) {
+      toast.error('Please fill in all bank details');
+      return;
+    }
+
+    setSubmitting(true);
+    const reference = generateReference('WDR');
+
+    const { error } = await supabase.from('withdrawals').insert({
+      user_id: profile!.id,
+      reference,
+      amount: amt,
+      bank_name: form.bank_name,
+      account_name: form.account_name,
+      account_number: form.account_number,
+      status: 'pending',
+    });
+
+    if (error) {
+      toast.error('Failed to submit withdrawal: ' + error.message);
+    } else {
+      toast.success('Withdrawal request submitted! Awaiting admin approval.');
+      setForm(f => ({ ...f, amount: '' }));
+      const { data: wd } = await supabase.from('withdrawals').select('*').eq('user_id', profile!.id).order('created_at', { ascending: false }).limit(5);
+      setWithdrawals(wd || []);
+    }
+    setSubmitting(false);
   };
+
+  if (loading) return <div className="flex justify-center min-h-[60vh] items-center"><div className="w-10 h-10 rounded-full border-4 border-brand-500/20 border-t-brand-500 animate-spin" /></div>;
+
+  const balance = wallet?.balance || 0;
+  const minWd = parseFloat(settings.min_withdrawal || '1000');
 
   return (
     <div>
-      <DashboardHeader title="Withdraw Funds" subtitle="Withdrawals: Mon–Fri, 9:00 AM – 12:00 PM WAT." />
+      <DashboardHeader title="Withdraw" subtitle="Request a withdrawal to your bank account." />
 
-      <div className="max-w-2xl mx-auto">
-        {/* Status banner */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className={`glass rounded-2xl p-4 mb-6 flex items-center gap-3 ${canWithdraw ? 'glass-brand' : 'border-gold-500/30'}`}
-        >
-          {canWithdraw ? (
-            <><CheckCircle2 className="w-5 h-5 text-brand-400 shrink-0" /><p className="text-sm text-brand-400">Withdrawal window is open! Submit your request now.</p></>
-          ) : (
-            <><Clock className="w-5 h-5 text-gold-400 shrink-0" /><p className="text-sm text-white/60">Withdrawals are only processed Mon–Fri, 9AM–12PM WAT. Please come back during the window.</p></>
-          )}
+      {!windowOpen && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mb-4">
+          <GlassCard className="p-4 border-gold-500/30">
+            <div className="flex items-center gap-3">
+              <Clock className="w-5 h-5 text-gold-400 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-gold-400">Withdrawal Window Closed</p>
+                <p className="text-xs text-white/50 mt-0.5">
+                  Withdrawals are only available Monday–Friday, {settings.withdraw_start || '09:00'}–{settings.withdraw_end || '12:00'} WAT.
+                </p>
+              </div>
+            </div>
+          </GlassCard>
+        </motion.div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+          <GlassCard variant="brand" className="p-6">
+            <p className="text-sm text-white/50">Available Balance</p>
+            <h2 className="font-display text-4xl font-bold mt-2">{formatNaira(balance)}</h2>
+            <div className="mt-4 space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-white/40">Minimum withdrawal</span>
+                <span className="font-medium">{formatNaira(minWd)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-white/40">Withdrawal window</span>
+                <span className="font-medium">{settings.withdraw_start || '09:00'}–{settings.withdraw_end || '12:00'} WAT</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-white/40">Withdrawal days</span>
+                <span className="font-medium">Mon–Fri</span>
+              </div>
+            </div>
+          </GlassCard>
         </motion.div>
 
-        {done ? (
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
-            <GlassCard variant="brand" className="p-8 text-center">
-              <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', delay: 0.1 }} className="w-16 h-16 rounded-full bg-brand-500/20 flex items-center justify-center mx-auto mb-5">
-                <CheckCircle2 className="w-8 h-8 text-brand-400" />
-              </motion.div>
-              <h3 className="font-display text-xl font-bold mb-2">Withdrawal Submitted!</h3>
-              <p className="text-sm text-white/50 mb-6">₦{amount.toLocaleString()} will be sent to {bank} ••••{account.slice(-4)} within 24 hours.</p>
-              <button onClick={() => setDone(false)} className="text-sm text-brand-400 hover:underline">Make another withdrawal</button>
-            </GlassCard>
-          </motion.div>
-        ) : (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-            <GlassCard className="p-6">
-              <div className="glass rounded-2xl p-4 mb-5 flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-white/40">Withdrawable Balance</p>
-                  <p className="text-2xl font-display font-bold text-gold-400">₦48,500</p>
-                </div>
-                <ArrowUpFromLine className="w-8 h-8 text-white/20" />
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+          <GlassCard className="p-6">
+            <h3 className="font-display font-bold mb-5">Withdrawal Form</h3>
+            <form onSubmit={onSubmit} className="space-y-4">
+              <div>
+                <label className="text-xs text-white/60 mb-1.5 block">Amount (₦)</label>
+                <input
+                  type="number"
+                  required
+                  min={minWd}
+                  value={form.amount}
+                  onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                  disabled={!windowOpen}
+                  className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors disabled:opacity-50"
+                  placeholder={`Minimum ${formatNaira(minWd)}`}
+                />
               </div>
-
-              <form onSubmit={submit} className="space-y-4">
-                <div>
-                  <label className="text-xs text-white/60 mb-1.5 block">Amount (₦)</label>
-                  <input
-                    type="number"
-                    min={1000}
-                    value={amount}
-                    onChange={(e) => setAmount(Number(e.target.value))}
-                    className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors"
-                  />
-                  <p className="text-xs text-white/40 mt-1.5">Minimum: ₦1,000</p>
-                </div>
-
-                <div>
-                  <label className="text-xs text-white/60 mb-1.5 block">Bank Name</label>
-                  <input
-                    required
-                    value={bank}
-                    onChange={(e) => setBank(e.target.value)}
-                    className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors"
-                    placeholder="e.g. Access Bank"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs text-white/60 mb-1.5 block">Account Number</label>
-                  <input
-                    required
-                    value={account}
-                    onChange={(e) => setAccount(e.target.value)}
-                    className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors"
-                    placeholder="0123456789"
-                  />
-                </div>
-
-                <div className="glass rounded-2xl p-3 flex gap-2">
-                  <Info className="w-4 h-4 text-gold-400 shrink-0 mt-0.5" />
-                  <p className="text-xs text-white/50">Withdrawals are processed within 24 hours during business days.</p>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading || !canWithdraw}
-                  className="w-full bg-gradient-to-r from-brand-500 to-brand-400 text-ink-900 font-semibold py-3.5 rounded-xl flex items-center justify-center gap-2 hover:shadow-glow transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? 'Processing...' : <><ArrowUpFromLine className="w-4 h-4" /> Withdraw ₦{amount.toLocaleString()}</>}
-                </button>
-                {!canWithdraw && <p className="text-xs text-center text-gold-400/80">Withdrawal window closed. Available Mon–Fri, 9AM–12PM WAT.</p>}
-              </form>
-            </GlassCard>
-          </motion.div>
-        )}
+              <div>
+                <label className="text-xs text-white/60 mb-1.5 block">Bank Name</label>
+                <input
+                  required
+                  value={form.bank_name}
+                  onChange={(e) => setForm({ ...form, bank_name: e.target.value })}
+                  disabled={!windowOpen}
+                  className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors disabled:opacity-50"
+                  placeholder="e.g. Moniepoint"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-white/60 mb-1.5 block">Account Name</label>
+                <input
+                  required
+                  value={form.account_name}
+                  onChange={(e) => setForm({ ...form, account_name: e.target.value })}
+                  disabled={!windowOpen}
+                  className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors disabled:opacity-50"
+                  placeholder="Account name"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-white/60 mb-1.5 block">Account Number</label>
+                <input
+                  required
+                  value={form.account_number}
+                  onChange={(e) => setForm({ ...form, account_number: e.target.value })}
+                  disabled={!windowOpen}
+                  className="w-full glass rounded-xl px-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors disabled:opacity-50"
+                  placeholder="Account number"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={submitting || !windowOpen}
+                className="w-full bg-gradient-to-r from-brand-500 to-brand-400 text-ink-900 font-semibold py-3.5 rounded-xl hover:shadow-glow transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {submitting ? 'Submitting...' : 'Request Withdrawal'}
+              </button>
+            </form>
+          </GlassCard>
+        </motion.div>
       </div>
+
+      {withdrawals.length > 0 && (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="mt-6">
+          <GlassCard className="p-6">
+            <h3 className="font-display font-bold mb-4">Recent Withdrawals</h3>
+            <div className="space-y-3">
+              {withdrawals.map((w) => (
+                <div key={w.id} className="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                      w.status === 'approved' ? 'bg-brand-500/15' : w.status === 'pending' ? 'bg-gold-500/15' : 'bg-red-500/15'
+                    }`}>
+                      {w.status === 'approved' ? <Check className="w-4 h-4 text-brand-400" /> : <Clock className="w-4 h-4 text-gold-400" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium font-mono">{w.reference}</p>
+                      <p className="text-xs text-white/40">{w.bank_name} • {formatDateTime(w.created_at)}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-display font-bold">{formatNaira(Number(w.amount))}</p>
+                    <span className={`text-xs capitalize ${w.status === 'approved' ? 'text-brand-400' : w.status === 'pending' ? 'text-gold-400' : 'text-red-400'}`}>{w.status}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
+        </motion.div>
+      )}
     </div>
   );
 }

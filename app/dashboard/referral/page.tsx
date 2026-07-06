@@ -1,134 +1,171 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { useState } from 'react';
-import { Gift, Copy, Check, Share2, Users, TrendingUp, MessageCircle, Send } from 'lucide-react';
+import { Users, Copy, Share2, Gift } from 'lucide-react';
 import { GlassCard } from '@/components/shared/glass-card';
 import { DashboardHeader } from '@/components/shared/dashboard-header';
+import { useAuth } from '@/lib/auth-context';
+import { supabase } from '@/lib/supabase';
+import { formatNaira, formatDate } from '@/lib/helpers';
 import { toast } from 'sonner';
 
-const referralLink = 'https://cashmoney.ng/r/ADEBAYO2026';
-const referralCode = 'ADEBAYO2026';
-
-const referralHistory = [
-  { name: 'Chioma E.', date: 'Jul 4, 2026', bonus: 5000, status: 'paid' },
-  { name: 'Ibrahim M.', date: 'Jul 2, 2026', bonus: 3000, status: 'paid' },
-  { name: 'Funke A.', date: 'Jun 30, 2026', bonus: 2000, status: 'paid' },
-  { name: 'Tunde O.', date: 'Jun 28, 2026', bonus: 10000, status: 'paid' },
-];
-
 export default function ReferralPage() {
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
+  const { profile } = useAuth();
+  const [referrals, setReferrals] = useState<any[]>([]);
+  const [totalEarnings, setTotalEarnings] = useState(0);
+  const [bonusRate, setBonusRate] = useState(10);
+  const [loading, setLoading] = useState(true);
 
-  const copyLink = () => {
-    navigator.clipboard?.writeText(referralLink);
-    setCopiedLink(true);
-    toast.success('Referral link copied');
-    setTimeout(() => setCopiedLink(false), 2000);
-  };
-  const copyCode = () => {
-    navigator.clipboard?.writeText(referralCode);
-    setCopiedCode(true);
-    toast.success('Referral code copied');
-    setTimeout(() => setCopiedCode(false), 2000);
+  useEffect(() => {
+    if (!profile) return;
+    (async () => {
+      const { data: refs } = await supabase
+        .from('referrals')
+        .select(`
+          id, bonus_amount, status, created_at,
+          referred_id
+        `)
+        .eq('referrer_id', profile.id)
+        .order('created_at', { ascending: false });
+
+      const refIds = (refs || []).map((r: any) => r.referred_id);
+      let userMap: Record<string, any> = {};
+      if (refIds.length > 0) {
+        const { data: users } = await supabase.from('profiles').select('id, full_name, created_at').in('id', refIds);
+        (users || []).forEach((u: any) => { userMap[u.id] = u; });
+      }
+
+      const enriched = (refs || []).map((r: any) => ({
+        ...r,
+        referred_user: userMap[r.referred_id],
+      }));
+      setReferrals(enriched);
+
+      const { data: refTxns } = await supabase.from('transactions').select('amount').eq('user_id', profile.id).eq('type', 'referral').eq('direction', 'credit');
+      setTotalEarnings((refTxns || []).reduce((s, t) => s + Number(t.amount), 0));
+
+      const { data: s } = await supabase.from('settings').select('value').eq('key', 'referral_bonus').maybeSingle();
+      setBonusRate(parseFloat(s?.value || '10'));
+
+      setLoading(false);
+    })();
+  }, [profile]);
+
+  const copyText = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`${label} copied`);
   };
 
-  const shareWhatsApp = () => {
-    window.open(`https://wa.me/?text=${encodeURIComponent(`Join me on CASH MONEY and earn 10% daily! Use my link: ${referralLink}`)}`, '_blank');
-  };
-  const shareTelegram = () => {
-    window.open(`https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('Join me on CASH MONEY and earn 10% daily!')}`, '_blank');
-  };
+  if (loading) return <div className="flex justify-center min-h-[60vh] items-center"><div className="w-10 h-10 rounded-full border-4 border-brand-500/20 border-t-brand-500 animate-spin" /></div>;
+
+  const referralCode = profile?.referral_code || '';
+  const referralLink = typeof window !== 'undefined' ? `${window.location.origin}/auth/register?ref=${referralCode}` : '';
 
   return (
     <div>
-      <DashboardHeader title="Referral Program" subtitle="Earn 10% bonus on every referral's deposit." />
+      <DashboardHeader title="Referral Program" subtitle={`Earn ${bonusRate}% bonus on every referral's deposits.`} />
 
-      <div className="grid sm:grid-cols-3 gap-4 mb-6">
-        {[
-          { icon: Users, label: 'Total Referrals', value: '24', color: 'text-brand-400' },
-          { icon: Gift, label: 'Referral Earnings', value: '₦20,000', color: 'text-gold-400' },
-          { icon: TrendingUp, label: 'This Month', value: '₦8,500', color: 'text-brand-400' },
-        ].map((s, i) => (
-          <motion.div key={s.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
-            <GlassCard className="p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-brand-500/15 flex items-center justify-center">
-                  <s.icon className={`w-5 h-5 ${s.color}`} />
-                </div>
-                <div>
-                  <p className="text-xs text-white/40">{s.label}</p>
-                  <p className="font-display font-bold text-lg">{s.value}</p>
-                </div>
-              </div>
-            </GlassCard>
-          </motion.div>
-        ))}
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-6">
-        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
-          <GlassCard variant="brand" className="p-6">
-            <h3 className="font-display font-semibold mb-4 flex items-center gap-2">
-              <Share2 className="w-5 h-5 text-brand-400" /> Share Your Link
-            </h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs text-white/60 mb-1.5 block">Referral Link</label>
-                <div className="flex gap-2">
-                  <div className="flex-1 glass rounded-xl px-4 py-3 text-sm text-brand-400 truncate">{referralLink}</div>
-                  <button onClick={copyLink} className="glass-strong rounded-xl px-4 flex items-center gap-1.5 hover:bg-white/15 transition-colors">
-                    {copiedLink ? <Check className="w-4 h-4 text-brand-400" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs text-white/60 mb-1.5 block">Referral Code</label>
-                <div className="flex gap-2">
-                  <div className="flex-1 glass rounded-xl px-4 py-3 text-sm font-mono font-bold text-gold-400">{referralCode}</div>
-                  <button onClick={copyCode} className="glass-strong rounded-xl px-4 flex items-center gap-1.5 hover:bg-white/15 transition-colors">
-                    {copiedCode ? <Check className="w-4 h-4 text-brand-400" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 pt-2">
-                <button onClick={shareWhatsApp} className="bg-brand-500/15 text-brand-400 font-medium py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-brand-500/25 transition-colors">
-                  <MessageCircle className="w-4 h-4" /> WhatsApp
-                </button>
-                <button onClick={shareTelegram} className="bg-brand-500/15 text-brand-400 font-medium py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-brand-500/25 transition-colors">
-                  <Send className="w-4 h-4" /> Telegram
-                </button>
-              </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+          <GlassCard className="p-5">
+            <div className="w-10 h-10 rounded-xl glass flex items-center justify-center mb-3">
+              <Users className="w-5 h-5 text-brand-400" />
             </div>
+            <p className="text-xs text-white/40">Total Referrals</p>
+            <p className="font-display font-bold text-2xl mt-0.5">{referrals.length}</p>
           </GlassCard>
         </motion.div>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
+          <GlassCard className="p-5">
+            <div className="w-10 h-10 rounded-xl glass flex items-center justify-center mb-3">
+              <Gift className="w-5 h-5 text-gold-400" />
+            </div>
+            <p className="text-xs text-white/40">Referral Earnings</p>
+            <p className="font-display font-bold text-2xl mt-0.5 text-gold-400">{formatNaira(totalEarnings)}</p>
+          </GlassCard>
+        </motion.div>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+          <GlassCard className="p-5">
+            <div className="w-10 h-10 rounded-xl glass flex items-center justify-center mb-3">
+              <Share2 className="w-5 h-5 text-brand-400" />
+            </div>
+            <p className="text-xs text-white/40">Bonus Rate</p>
+            <p className="font-display font-bold text-2xl mt-0.5">{bonusRate}%</p>
+          </GlassCard>
+        </motion.div>
+      </div>
 
-        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
-          <GlassCard className="p-6">
-            <h3 className="font-display font-semibold mb-4">Referral History</h3>
-            <div className="space-y-3">
-              {referralHistory.map((r, i) => (
-                <div key={i} className="flex items-center justify-between p-3 glass rounded-xl">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center text-ink-900 font-bold text-sm">
-                      {r.name[0]}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">{r.name}</p>
-                      <p className="text-xs text-white/40">{r.date}</p>
-                    </div>
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+        <GlassCard variant="brand" className="p-6">
+          <h3 className="font-display font-bold mb-4">Share Your Referral Link</h3>
+          <div className="space-y-3">
+            <div className="glass rounded-xl p-4 flex items-center justify-between">
+              <div className="min-w-0">
+                <p className="text-xs text-white/40">Referral Code</p>
+                <p className="font-display font-bold text-lg tracking-wider truncate">{referralCode}</p>
+              </div>
+              <button onClick={() => copyText(referralCode, 'Referral code')} className="w-9 h-9 rounded-lg glass hover:bg-white/10 flex items-center justify-center transition-colors flex-shrink-0">
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="glass rounded-xl p-4 flex items-center justify-between">
+              <div className="min-w-0">
+                <p className="text-xs text-white/40">Referral Link</p>
+                <p className="text-sm font-medium truncate">{referralLink}</p>
+              </div>
+              <button onClick={() => copyText(referralLink, 'Referral link')} className="w-9 h-9 rounded-lg glass hover:bg-white/10 flex items-center justify-center transition-colors flex-shrink-0">
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex gap-3">
+              <a
+                href={`https://wa.me/?text=Join%20CASH%20MONEY%20and%20start%20earning%20daily!%20${encodeURIComponent(referralLink)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 glass rounded-xl py-3 text-sm font-medium text-center hover:bg-white/10 transition-colors"
+              >
+                Share on WhatsApp
+              </a>
+              <a
+                href={`https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=Join%20CASH%20MONEY`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 glass rounded-xl py-3 text-sm font-medium text-center hover:bg-white/10 transition-colors"
+              >
+                Share on Telegram
+              </a>
+            </div>
+          </div>
+        </GlassCard>
+      </motion.div>
+
+      <GlassCard className="p-6">
+        <h3 className="font-display font-bold mb-4">Referral History</h3>
+        {referrals.length === 0 ? (
+          <p className="text-sm text-white/40 text-center py-8">No referrals yet. Share your link to start earning!</p>
+        ) : (
+          <div className="space-y-3">
+            {referrals.map((r) => (
+              <div key={r.id} className="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center text-ink-900 font-bold text-sm">
+                    {r.referred_user?.full_name?.charAt(0) || '?'}
                   </div>
-                  <span className="text-sm font-semibold text-brand-400">+₦{r.bonus.toLocaleString()}</span>
+                  <div>
+                    <p className="text-sm font-medium">{r.referred_user?.full_name || 'Unknown'}</p>
+                    <p className="text-xs text-white/40">Joined {r.referred_user ? formatDate(r.referred_user.created_at) : ''}</p>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </GlassCard>
-        </motion.div>
-      </div>
+                <div className="text-right">
+                  <p className="font-display font-bold text-sm">{formatNaira(Number(r.bonus_amount))}</p>
+                  <span className={`text-xs capitalize ${r.status === 'paid' ? 'text-brand-400' : 'text-gold-400'}`}>{r.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </GlassCard>
     </div>
   );
 }

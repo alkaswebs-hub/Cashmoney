@@ -4,21 +4,57 @@ import { motion } from 'framer-motion';
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Phone, Lock, ArrowRight } from 'lucide-react';
+import { Mail, Lock, ArrowRight } from 'lucide-react';
 import { GlassCard } from '@/components/shared/glass-card';
+import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [form, setForm] = useState({ phone: '', password: '' });
+  const [form, setForm] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    toast.success('Welcome back!');
-    router.push('/dashboard');
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: form.email.trim().toLowerCase(),
+      password: form.password,
+    });
+
+    if (error) {
+      toast.error(error.message === 'Invalid login credentials'
+        ? 'Wrong email or password. Please try again.'
+        : error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (data.user) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role, status')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      if (profile?.status === 'suspended') {
+        toast.error('Your account has been suspended. Contact support.');
+        await supabase.auth.signOut();
+        setLoading(false);
+        return;
+      }
+
+      if (profile?.role === 'admin') {
+        toast.success('Welcome back, Admin!');
+        router.push('/admin');
+      } else {
+        toast.success('Welcome back!');
+        router.push('/dashboard');
+      }
+    }
+
+    setLoading(false);
   };
 
   return (
@@ -29,16 +65,16 @@ export default function LoginPage() {
 
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
-            <label className="text-xs text-white/60 mb-1.5 block">Phone Number</label>
+            <label className="text-xs text-white/60 mb-1.5 block">Email Address</label>
             <div className="relative">
-              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
               <input
                 required
-                type="tel"
-                value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                type="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
                 className="w-full glass rounded-xl pl-10 pr-4 py-3 text-sm outline-none focus:border-brand-500/50 border border-white/10 transition-colors"
-                placeholder="0800 000 0000"
+                placeholder="you@example.com"
               />
             </div>
           </div>

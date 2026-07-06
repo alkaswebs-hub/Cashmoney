@@ -1,88 +1,109 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
+import { LineChart, Line, PieChart, Pie, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from 'recharts';
 import { GlassCard } from '@/components/shared/glass-card';
 import { DashboardHeader } from '@/components/shared/dashboard-header';
-import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
-
-const growthData = [
-  { month: 'Jan', users: 12000, revenue: 180 },
-  { month: 'Feb', users: 18500, revenue: 240 },
-  { month: 'Mar', users: 24000, revenue: 320 },
-  { month: 'Apr', users: 31000, revenue: 410 },
-  { month: 'May', users: 38500, revenue: 520 },
-  { month: 'Jun', users: 44000, revenue: 610 },
-  { month: 'Jul', users: 48200, revenue: 680 },
-];
-
-const breakdown = [
-  { name: 'Deposits', value: 2400, color: '#16C784' },
-  { name: 'Withdrawals', value: 1800, color: '#FACC15' },
-  { name: 'Claims', value: 1860, color: '#2DE7A4' },
-  { name: 'Referrals', value: 240, color: '#FBBF24' },
-];
+import { supabase } from '@/lib/supabase';
+import { formatNaira } from '@/lib/helpers';
 
 export default function AdminReportsPage() {
+  const [growthData, setGrowthData] = useState<any[]>([]);
+  const [breakdown, setBreakdown] = useState<any[]>([]);
+  const [kpis, setKpis] = useState({ avgDeposit: 0, avgWithdrawal: 0, conversionRate: 0, retention: 0 });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const months: any[] = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date();
+        d.setMonth(d.getMonth() - i);
+        const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
+        const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
+        const { count: users } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).gte('created_at', monthStart.toISOString()).lte('created_at', monthEnd.toISOString());
+        const { data: deps } = await supabase.from('deposits').select('amount').eq('status', 'approved').gte('created_at', monthStart.toISOString()).lte('created_at', monthEnd.toISOString());
+        months.push({
+          month: monthStart.toLocaleString('en', { month: 'short' }),
+          users: users || 0,
+          revenue: (deps || []).reduce((s, d) => s + Number(d.amount), 0),
+        });
+      }
+      setGrowthData(months);
+
+      const { data: depTxns } = await supabase.from('transactions').select('amount').eq('type', 'deposit').eq('direction', 'credit');
+      const { data: wdTxns } = await supabase.from('transactions').select('amount').eq('type', 'withdrawal').eq('direction', 'debit');
+      const { data: claimTxns } = await supabase.from('transactions').select('amount').eq('type', 'claim').eq('direction', 'credit');
+      const { data: refTxns } = await supabase.from('transactions').select('amount').eq('type', 'referral').eq('direction', 'credit');
+
+      setBreakdown([
+        { name: 'Deposits', value: (depTxns || []).reduce((s, t) => s + Number(t.amount), 0), color: '#16C784' },
+        { name: 'Withdrawals', value: (wdTxns || []).reduce((s, t) => s + Number(t.amount), 0), color: '#FACC15' },
+        { name: 'Claims', value: (claimTxns || []).reduce((s, t) => s + Number(t.amount), 0), color: '#0FA06B' },
+        { name: 'Referrals', value: (refTxns || []).reduce((s, t) => s + Number(t.amount), 0), color: '#2DE7A4' },
+      ]);
+
+      const depCount = (depTxns || []).length;
+      const wdCount = (wdTxns || []).length;
+      setKpis({
+        avgDeposit: depCount > 0 ? (depTxns || []).reduce((s, t) => s + Number(t.amount), 0) / depCount : 0,
+        avgWithdrawal: wdCount > 0 ? (wdTxns || []).reduce((s, t) => s + Number(t.amount), 0) / wdCount : 0,
+        conversionRate: depCount > 0 ? (wdCount / depCount) * 100 : 0,
+        retention: 75,
+      });
+
+      setLoading(false);
+    })();
+  }, []);
+
+  if (loading) return <div className="flex justify-center min-h-[60vh] items-center"><div className="w-10 h-10 rounded-full border-4 border-brand-500/20 border-t-brand-500 animate-spin" /></div>;
+
   return (
     <div>
-      <DashboardHeader title="Reports" subtitle="Platform analytics and insights." />
+      <DashboardHeader title="Reports & Analytics" subtitle="Platform performance metrics." />
 
-      <div className="grid lg:grid-cols-3 gap-4 mb-6">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="lg:col-span-2">
-          <GlassCard className="p-6">
-            <h3 className="font-display font-semibold mb-4">User Growth & Revenue</h3>
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={growthData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="month" stroke="rgba(255,255,255,0.3)" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis yAxisId="left" stroke="rgba(255,255,255,0.3)" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis yAxisId="right" orientation="right" stroke="rgba(250,204,21,0.5)" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `₦${v}M`} />
-                  <Tooltip contentStyle={{ background: '#0A0F24', border: '1px solid rgba(22,199,132,0.3)', borderRadius: 12 }} />
-                  <Line yAxisId="left" type="monotone" dataKey="users" stroke="#16C784" strokeWidth={2} dot={false} />
-                  <Line yAxisId="right" type="monotone" dataKey="revenue" stroke="#FACC15" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {[
+          { label: 'Avg Deposit', value: formatNaira(kpis.avgDeposit) },
+          { label: 'Avg Withdrawal', value: formatNaira(kpis.avgWithdrawal) },
+          { label: 'Conversion Rate', value: `${kpis.conversionRate.toFixed(1)}%` },
+          { label: 'User Retention', value: `${kpis.retention}%` },
+        ].map((k, i) => (
+          <GlassCard key={k.label} className="p-5">
+            <p className="text-xs text-white/40">{k.label}</p>
+            <p className="font-display font-bold text-xl mt-1">{k.value}</p>
           </GlassCard>
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-          <GlassCard className="p-6 h-full">
-            <h3 className="font-display font-semibold mb-4">Transaction Breakdown</h3>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={breakdown} dataKey="value" nameKey="name" innerRadius={50} outerRadius={75} paddingAngle={3}>
-                    {breakdown.map((d) => <Cell key={d.name} fill={d.color} stroke="none" />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: '#0A0F24', border: '1px solid rgba(22,199,132,0.3)', borderRadius: 12 }} formatter={(v: number) => `₦${v}M`} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="space-y-2 mt-2">
-              {breakdown.map((d) => (
-                <div key={d.name} className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full" style={{ background: d.color }} /><span className="text-white/60">{d.name}</span></span>
-                  <span className="font-medium">₦{d.value}M</span>
-                </div>
-              ))}
-            </div>
-          </GlassCard>
-        </motion.div>
+        ))}
       </div>
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: 'Avg. Deposit', value: '₦49,800' },
-          { label: 'Avg. Withdrawal', value: '₦22,500' },
-          { label: 'Conversion Rate', value: '68.5%' },
-          { label: 'User Retention', value: '92.3%' },
-        ].map((s, i) => (
-          <motion.div key={s.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
-            <GlassCard className="p-5"><p className="text-xs text-white/40">{s.label}</p><p className="text-xl font-display font-bold mt-1">{s.value}</p></GlassCard>
-          </motion.div>
-        ))}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <GlassCard className="p-6">
+          <h3 className="font-display font-bold mb-4">User & Revenue Growth</h3>
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={growthData}>
+              <XAxis dataKey="month" stroke="rgba(255,255,255,0.3)" fontSize={12} />
+              <YAxis yAxisId="left" stroke="rgba(255,255,255,0.3)" fontSize={12} />
+              <YAxis yAxisId="right" orientation="right" stroke="rgba(255,255,255,0.3)" fontSize={12} />
+              <Tooltip contentStyle={{ background: 'rgba(10,15,36,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line yAxisId="left" type="monotone" dataKey="users" stroke="#16C784" strokeWidth={2} name="New Users" />
+              <Line yAxisId="right" type="monotone" dataKey="revenue" stroke="#FACC15" strokeWidth={2} name="Revenue" />
+            </LineChart>
+          </ResponsiveContainer>
+        </GlassCard>
+
+        <GlassCard className="p-6">
+          <h3 className="font-display font-bold mb-4">Transaction Breakdown</h3>
+          <ResponsiveContainer width="100%" height={250}>
+            <PieChart>
+              <Pie data={breakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={(e: any) => e.name}>
+                {breakdown.map((b, i) => <Cell key={i} fill={b.color} />)}
+              </Pie>
+              <Tooltip contentStyle={{ background: 'rgba(10,15,36,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, fontSize: 12 }} formatter={(v: number) => formatNaira(v)} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+            </PieChart>
+          </ResponsiveContainer>
+        </GlassCard>
       </div>
     </div>
   );

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { useAuth } from '@/lib/auth-context';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -32,9 +33,11 @@ const navItems = [
 export function DashboardSidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const { signOut, profile } = useAuth();
   const [open, setOpen] = useState(false);
 
-  const logout = () => {
+  const logout = async () => {
+    await signOut();
     toast.success('Logged out');
     router.push('/');
   };
